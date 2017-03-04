@@ -1,32 +1,38 @@
 # -*- coding: utf-8 -*-
 import re
 import scrapy
+import scrapy.crawler
 
 from  fangspider.items import FangspiderItem
 
-FETCH_PRICE_L = 150 # 价格左区间
-FETCH_PRICE_R = 250 # 价格右区间
-FETCH_PAGES = 1     # 5页覆盖了上诉区间差不多2小时的数据
-
 FTECH_URL_ROOT = "http://esf.sh.fang.com"
 # 二手房地址(按时间排序): http://esf.sh.fang.com/house/h316-i3页码/
-FTECH_URL_BY_TIME = "http://esf.sh.fang.com/house/h316-i3{0}/"
+# 价格区间 http://esf.sh.fang.com/house/c2起始价格（万）-d2结束价格（万）-h316-i3页码-l3100/
+# 价格区间 http://esf.sh.fang.com/house/c2起始价格（万）-d2结束价格（万）-h316-i3页码-l3100/
 
-#   价格区间 http://esf.sh.fang.com/house/c2起始价格（万）-d2结束价格（万）-h316-i3页码-l3100/
-FTECH_URL_BY_TIME_PRICE = "http://esf.sh.fang.com/house/c2" + str(FETCH_PRICE_L) + "-d2" + str(FETCH_PRICE_R) + "-h316-i3{0}-l3100/"
-FETCH_URLS = []
-for i in range(1, FETCH_PAGES + 1):
-    FETCH_URLS.append(FTECH_URL_BY_TIME_PRICE.format(i))
 
+PUBLISHER_CACHE = dict()
 
 PICK_SEGMENT = re.compile('[^\\s\\r\\n]+')
-PICK_NUMBER = re.compile('\\d+')
+PICK_NUMBER = re.compile('[\\d\\.]+')
+DEAL_NUMBER = re.compile('成交总量[^\\d]*(\\d+)')
 
 class FangtianxiaSpider(scrapy.Spider):
     name = 'fangtianxia'
     label = '房天下'
     allowed_domains = [".fang.com"]
-    start_urls = FETCH_URLS
+    start_urls = []
+    custom_settings = {
+        'FETCH_PAGES': 3
+    }
+
+    def start_requests(self):
+        # load settings
+        fang_conf = self.settings.getdict('FANGSPIDER_CONF')
+        for i in range(1, self.settings.getint('FETCH_PAGES') + 1):
+            self.start_urls.append("http://esf.sh.fang.com/house/c2{0}-d2{1}-h316-g22-i3{2}-l3100/".format(fang_conf['FETCH_PRICE_L'], fang_conf['FETCH_PRICE_R'], i))
+
+        return super().start_requests()
 
     def pick_link(self, url):
         if url[0:1] == '/':
@@ -88,18 +94,53 @@ class FangtianxiaSpider(scrapy.Spider):
             return 0
         res = PICK_NUMBER.search(arr[idx])
         if res is not None:
-            return int(res.group(0))
+            return float(res.group(0))
         return 0
+
+    def pick_number_from_str(self, strin):
+        if strin is None:
+            return 0
+        if len(strin) <= 0:
+            return 0
+        res = PICK_NUMBER.search(strin)
+        if res is not None:
+            return float(res.group(0))
+        return 0
+
+    def parse_publisher(self, response):
+        pub_info = {
+            'deal_count': 0,
+            'publish_count': 0
+        }
+        pub_dom = response.css('#allhousecount')
+        pub_str = (''.join(pub_dom.xpath('text()').extract())).strip()
+
+        if len(pub_str) > 0:
+            pub_info['publish_count'] = int(pub_str)
+
+        deal_str = (''.join(response.css('.about *').xpath('text()').extract())).strip()
+        res = DEAL_NUMBER.search(deal_str)
+        if res is not None:
+            pub_info['deal_count'] = int(res.group(1))
+
+        item = response.meta['item']
+        url = response.url
+        PUBLISHER_CACHE[url] = pub_info
+        item['deal_count'] = pub_info['deal_count']
+        item['publish_count'] = pub_info['publish_count']
+
+        yield item
 
     def parse(self, response):
         item_doms = response.css('.houseList > .list')
+        #items = []
         for element in item_doms:
             item = FangspiderItem()
             item['source'] = self.label
             item['title'] = (''.join(element.css('.floatr > .title').xpath('a/text()').extract())).strip()
-            item['money'] = (''.join(element.css('.floatr .price').xpath('text()').extract())).strip() + '万'
-            item['price'] = (''.join(element.css('.floatr .danjia').xpath('text()').extract())).strip() + '㎡'
-            item['area'] = (''.join(element.css('.floatr > .area').xpath('p[1]/text()').extract())).strip()
+            item['money'] = (''.join(element.css('.floatr .price').xpath('text()').extract())).strip()
+            item['price'] = str(self.pick_number_from_str((''.join(element.css('.floatr .danjia').xpath('text()').extract())).strip())) + u'/㎡'
+            item['area'] = str(self.pick_number_from_str((''.join(element.css('.floatr > .area').xpath('p[1]/text()').extract())).strip()))
             item['plot'] = (''.join(element.css('.floatr').xpath('p[3]/a/span/text()').extract())).strip()
             item['address'] = (''.join(element.css('.floatr').xpath('p[3]/span/text()').extract())).strip()
             item['link'] = self.pick_link((''.join(element.css('.floatr > .title').xpath('a/@href').extract())).strip())
@@ -116,5 +157,19 @@ class FangtianxiaSpider(scrapy.Spider):
             item['layer'] = self.pick_string(mt12, 1)
             item['toward'] = self.pick_string(mt12, 2)
             item['year'] = self.pick_number(mt12, 3)
-            item['deal_count'] = self.pick_link((''.join(element.css('.floatr').xpath('p[4]/a/@href').extract())).strip())
-            yield item
+            item['publisher'] = self.pick_link((''.join(element.css('.floatr').xpath('p[4]/a/@href').extract())).strip())
+            #self.fetch_publisher_deal_count(item['publisher'], item)
+
+            publisher_info = PUBLISHER_CACHE.get(item['publisher'])
+            if publisher_info is not None:
+                item['deal_count'] = publisher_info['deal_count']
+                item['publish_count'] = publisher_info['publish_count']
+                yield item
+
+            if len(item['publisher']) <= 0:
+                item['deal_count'] = 0
+                item['publish_count'] = 0
+                yield item
+
+            # fetch publisher info
+            yield scrapy.Request(item['publisher'], callback=self.parse_publisher, meta={'item' : item}, dont_filter=True)
