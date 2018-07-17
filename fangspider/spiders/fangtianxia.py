@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import re
+import sys
 import scrapy
 import scrapy.crawler
 
@@ -32,7 +33,10 @@ class FangtianxiaSpider(scrapy.Spider):
         for i in range(1, self.settings.getint('FETCH_PAGES') + 1):
             self.start_urls.append("http://esf.sh.fang.com/house/c2{0}-d2{1}-h316-g22-i3{2}-l3100/".format(fang_conf['FETCH_PRICE_L'], fang_conf['FETCH_PRICE_R'], i))
 
-        return super().start_requests()
+        if 2 == sys.version_info[0]:
+            return super(FangtianxiaSpider, self).start_requests()
+        else:
+            return super().start_requests()
 
     def pick_link(self, url):
         if url[0:1] == '/':

@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import re
+import sys
 import scrapy
 
 from  fangspider.items import FangspiderItem
@@ -29,7 +30,10 @@ class LianjiaSpider(scrapy.Spider):
         for i in range(1, self.settings.getint('FETCH_PAGES') + 1):
             self.start_urls.append("http://sh.lianjia.com/ershoufang/a2b{0}to{1}d{2}l2s7".format(fang_conf['FETCH_PRICE_L'], fang_conf['FETCH_PRICE_R'], i))
 
-        return super().start_requests()
+        if 2 == sys.version_info[0]:
+            return super(LianjiaSpider, self).start_requests()
+        else:
+            return super().start_requests()
 
     def pick_link(self, url):
         if url[0:1] == '/':
